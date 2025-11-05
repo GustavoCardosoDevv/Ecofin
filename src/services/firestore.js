@@ -45,12 +45,6 @@ export async function addTransaction({ type, amount, category, note, date }) {
   });
 }
 
-
-/**
- * Assina o orçamento do usuário a partir do documento users/{uid}.
- * Salva no campo "budgetLimit".
- * Normaliza para { limit: number } para a HomeScreen.
- */
 export function subscribeUserBudget(callback) {
   const user = auth.currentUser;
   if (!user) return () => {};
