@@ -1,41 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Platform,
-  Pressable,
+  View,
+  Text,
   ScrollView,
   StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+  Pressable,
+  Platform,
 } from 'react-native';
-import HeaderBar from '../components/HeaderBar';
 import { useAuth } from '../context/AuthContext';
+import HeaderBar from '../components/HeaderBar';
+import { useTheme } from '../context/ThemeContext';
+import PaymentsCalendar from '../components/PaymentsCalendar'; // ✅ novo import
 
 import {
-  addBalance,
-  saveUserBudget,
-  subscribeUserBalance,
-  subscribeUserBudget,
   subscribeUserTransactions,
-  transferBalance,
+  subscribeUserBudget,
+  saveUserBudget,
 } from '../services/firestore';
-
-const COLORS = {
-  primary: '#588DB0',
-  text: '#0F2D52',
-  sub: '#6B7280',
-  bg: '#F5F7FB',
-  card: '#FFFFFF',
-  red: '#DC2626',
-  green: '#16A34A',
-  border: '#E5E7EB',
-  alertBg: '#FDECEC',
-  alertBorder: '#F8B4B4',
-};
 
 function formatBRL(value = 0) {
   try {
@@ -45,38 +26,34 @@ function formatBRL(value = 0) {
   }
 }
 
-export default function HomeScreen() {
+export default function HomeScreen({ navigation }) {
   const { user, signOut } = useAuth();
+  const { colors, theme, toggleTheme } = useTheme();
   const nameOrEmail = user?.displayName || user?.email || 'Usuário';
 
   const [transactions, setTransactions] = useState([]);
   const [budget, setBudget] = useState(null);
-  const [balance, setBalance] = useState(0);
-  
-  // Modais
-  const [showAddBalance, setShowAddBalance] = useState(false);
-  const [showTransfer, setShowTransfer] = useState(false);
-  const [addBalanceAmount, setAddBalanceAmount] = useState('');
-  const [transferEmail, setTransferEmail] = useState('');
-  const [transferAmount, setTransferAmount] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [payments, setPayments] = useState([]); // ✅ novo estado para o calendário
 
   useEffect(() => {
     const unsubTx = subscribeUserTransactions(setTransactions);
     const unsubBudget = subscribeUserBudget(setBudget);
-    const unsubBalance = subscribeUserBalance((newBalance) => {
-      console.log('Balance recebido:', newBalance);
-      Alert.alert('Debug Balance', `Balance recebido: ${newBalance}`);
-      setBalance(newBalance);
-    });
     return () => {
       unsubTx && unsubTx();
       unsubBudget && unsubBudget();
-      unsubBalance && unsubBalance();
     };
   }, []);
 
-  // Cálculos
+  // ✅ função para salvar pagamentos do calendário
+  const handleSavePayment = (payment, isEdit) => {
+    setPayments(prev =>
+      isEdit
+        ? prev.map(p => (p.id === payment.id ? { ...p, ...payment } : p))
+        : [...prev, payment]
+    );
+  };
+
+  // Cálculos de saldo e orçamento
   const { totalIncome, totalExpense } = useMemo(() => {
     let income = 0;
     let expense = 0;
@@ -88,16 +65,15 @@ export default function HomeScreen() {
     return { totalIncome: income, totalExpense: expense };
   }, [transactions]);
 
-  const budgetLimit = Number(budget?.limit || 0);
-  
-  const budgetUsedPct = useMemo(() => {
-    console.log('Calculando budgetUsedPct - balance:', balance, 'budgetLimit:', budgetLimit);
-    if (!budgetLimit || budgetLimit === 0) return 0;
-    const pct = (balance / budgetLimit) * 100;
-    return Math.min(100, Math.max(0, pct));
-  }, [balance, budgetLimit]);
+  const balance = totalIncome - totalExpense;
 
-  const showBudgetAlert = budgetLimit > 0 && balance > budgetLimit;
+  const budgetLimit = Number(budget?.limit || 0);
+  const budgetUsedPct = useMemo(() => {
+    if (!budgetLimit) return 0;
+    return Math.min(100, (totalExpense / budgetLimit) * 100);
+  }, [totalExpense, budgetLimit]);
+
+  const showBudgetAlert = budgetLimit > 0 && totalExpense > budgetLimit;
 
   const handleOpenBudget = async () => {
     let value = null;
@@ -109,62 +85,9 @@ export default function HomeScreen() {
     }
   };
 
-  const handleAddBalance = async () => {
-    const amount = parseFloat(addBalanceAmount.replace(',', '.'));
-    if (!amount || amount <= 0) {
-      Alert.alert('Atenção', 'Informe um valor válido maior que zero.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      await addBalance(amount);
-      Alert.alert('Sucesso', `Saldo de ${formatBRL(amount)} adicionado com sucesso!`);
-      setShowAddBalance(false);
-      setAddBalanceAmount('');
-    } catch (e) {
-      Alert.alert('Erro', e.message || 'Não foi possível adicionar saldo.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleTransfer = async () => {
-    const amount = parseFloat(transferAmount.replace(',', '.'));
-    const email = transferEmail.trim().toLowerCase();
-
-    if (!email || !email.includes('@')) {
-      Alert.alert('Atenção', 'Informe um email válido.');
-      return;
-    }
-
-    if (!amount || amount <= 0) {
-      Alert.alert('Atenção', 'Informe um valor válido maior que zero.');
-      return;
-    }
-
-    if (amount > balance) {
-      Alert.alert('Atenção', 'Saldo insuficiente para esta transferência.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      await transferBalance(email, amount);
-      Alert.alert('Sucesso', `Transferência de ${formatBRL(amount)} realizada com sucesso!`);
-      setShowTransfer(false);
-      setTransferEmail('');
-      setTransferAmount('');
-    } catch (e) {
-      Alert.alert('Erro', e.message || 'Não foi possível realizar a transferência.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
-    <View style={{ flex: 1, backgroundColor: COLORS.bg }}>
-      {/* HEADER COM MENU (hambúrguer) */}
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+      {/* HEADER */}
       <HeaderBar
         userName={nameOrEmail}
         onSignOut={signOut}
@@ -172,27 +95,49 @@ export default function HomeScreen() {
         onGoProfile={() => navigation.navigate('Profile')}
       />
 
+      {/* Botão de alternância de tema */}
+      <Pressable
+        onPress={toggleTheme}
+        style={{
+          backgroundColor: colors.primary,
+          alignSelf: 'flex-end',
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+          borderRadius: 10,
+          marginRight: 16,
+          marginTop: 8,
+        }}
+      >
+        <Text style={{ color: '#fff', fontWeight: '700' }}>
+          {theme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}
+        </Text>
+      </Pressable>
+
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
         {/* Card: Saldo Total */}
-        <View style={styles.card}>
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={{ marginBottom: 8 }}>
-            <Text style={styles.cardTitle}>Saldo da Conta</Text>
-            <Text style={styles.balanceValue}>{formatBRL(balance)}</Text>
+            <Text style={[styles.cardTitle, { color: colors.text }]}>Saldo Total</Text>
+            <Text style={[styles.balanceValue, { color: colors.text }]}>{formatBRL(balance)}</Text>
           </View>
 
           <View style={styles.rowBetween}>
-            <Text style={styles.muted}>Receitas: {formatBRL(totalIncome)}</Text>
-            <Text style={styles.muted}>Despesas: {formatBRL(totalExpense)}</Text>
+            <Text style={[styles.muted, { color: colors.sub }]}>
+              Receitas: {formatBRL(totalIncome)}
+            </Text>
+            <Text style={[styles.muted, { color: colors.sub }]}>
+              Despesas: {formatBRL(totalExpense)}
+            </Text>
           </View>
         </View>
 
         {/* Card: Orçamento Mensal */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Orçamento Mensal</Text>
-          <Text style={[styles.muted, { marginTop: 6 }]}>
-            {formatBRL(balance)} de {formatBRL(budgetLimit)}{' '}
-            <Text style={{ fontWeight: '700' }}>
-              {budgetUsedPct.toFixed(1)}%
+        <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Orçamento Mensal</Text>
+          <Text style={[styles.muted, { marginTop: 6, color: colors.sub }]}>
+            {formatBRL(totalExpense)} de {formatBRL(budgetLimit)}{' '}
+            <Text style={{ fontWeight: '700', color: colors.text }}>
+              {budgetLimit ? `${budgetUsedPct.toFixed(1)}%` : '0.0%'}
             </Text>
           </Text>
 
@@ -200,60 +145,69 @@ export default function HomeScreen() {
             <View
               style={[
                 styles.progressFill,
-                { width: `${budgetUsedPct}%` },
+                { width: `${budgetUsedPct}%`, backgroundColor: colors.primary },
               ]}
             />
           </View>
         </View>
 
-        {/* Alerta (só se ultrapassar o orçamento) */}
+        {/* Alerta de gasto */}
         {showBudgetAlert && (
-          <View style={styles.alertBox}>
-            <Text style={styles.alertTitle}>Alerta de Saldo Elevado</Text>
-            <Text style={styles.alertText}>
-              Seu saldo de {formatBRL(balance)} está acima do orçamento mensal de{' '}
-              {formatBRL(budgetLimit)}. Considere ajustar seu planejamento financeiro.
+          <View
+            style={[
+              styles.alertBox,
+              { backgroundColor: '#FDECEC', borderColor: '#F8B4B4' },
+            ]}
+          >
+            <Text style={[styles.alertTitle, { color: colors.red }]}>
+              Alerta de Gasto Excessivo
+            </Text>
+            <Text style={[styles.alertText, { color: colors.sub }]}>
+              Você gastou {formatBRL(totalExpense)} no mês, acima do limite de{' '}
+              {formatBRL(budgetLimit)}. Considere rever suas despesas.
             </Text>
           </View>
         )}
 
-        {/* Botões de ação */}
-        <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-          <Pressable 
-            style={[styles.pillBtn, { backgroundColor: COLORS.green }]}
-            onPress={() => setShowAddBalance(true)}
-          >
-            <Text style={styles.pillBtnText}>Adicionar Saldo</Text>
-          </Pressable>
-          <Pressable 
-            style={[styles.pillBtn, { backgroundColor: COLORS.primary }]}
-            onPress={() => setShowTransfer(true)}
-          >
-            <Text style={styles.pillBtnText}>Transferir</Text>
-          </Pressable>
+        {/* ✅ Novo: Calendário de Pagamentos */}
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.border, marginBottom: 20 },
+          ]}
+        >
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Calendário de Pagamentos</Text>
+          <PaymentsCalendar paymentsData={payments} onSavePayment={handleSavePayment} />
         </View>
 
         {/* Lista de Transações */}
-        <View style={[styles.card, { marginTop: 16 }]}>
-          <Text style={styles.sectionTitle}>Transações Recentes</Text>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.card, borderColor: colors.border },
+          ]}
+        >
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>
+            Transações Recentes
+          </Text>
 
           {transactions.length === 0 ? (
-            <Text style={[styles.muted, { marginTop: 8 }]}>
+            <Text style={[styles.muted, { marginTop: 8, color: colors.sub }]}>
               Sem transações ainda.
             </Text>
           ) : (
             transactions.map((t) => {
               const isIncome = (t.type || '').toLowerCase() === 'income';
               const sign = isIncome ? '+' : '−';
-              const color = isIncome ? COLORS.green : COLORS.red;
+              const color = isIncome ? colors.green : colors.red;
 
               return (
                 <View key={t.id} style={styles.txRow}>
                   <View>
-                    <Text style={styles.txTitle}>
+                    <Text style={[styles.txTitle, { color: colors.text }]}>
                       {t.title || t.note || 'Transação'}
                     </Text>
-                    <Text style={styles.txCategory}>
+                    <Text style={[styles.txCategory, { color: colors.sub }]}>
                       {t.category || (isIncome ? 'Receitas' : 'Despesas')}
                     </Text>
                   </View>
@@ -267,126 +221,15 @@ export default function HomeScreen() {
           )}
         </View>
       </ScrollView>
-
-      {/* Modal: Adicionar Saldo */}
-      <Modal
-        visible={showAddBalance}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowAddBalance(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Adicionar Saldo</Text>
-            <Text style={styles.modalSubtitle}>Informe o valor que deseja adicionar</Text>
-            
-            <TextInput
-              style={styles.modalInput}
-              placeholder="0,00"
-              keyboardType="decimal-pad"
-              value={addBalanceAmount}
-              onChangeText={setAddBalanceAmount}
-              placeholderTextColor={COLORS.sub}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => {
-                  setShowAddBalance(false);
-                  setAddBalanceAmount('');
-                }}
-                disabled={loading}
-              >
-                <Text style={styles.modalButtonTextCancel}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm]}
-                onPress={handleAddBalance}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.modalButtonTextConfirm}>Adicionar</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal: Transferir */}
-      <Modal
-        visible={showTransfer}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setShowTransfer(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Transferir</Text>
-            <Text style={styles.modalSubtitle}>Saldo disponível: {formatBRL(balance)}</Text>
-            
-            <Text style={styles.modalLabel}>Email do destinatário</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="exemplo@gmail.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              value={transferEmail}
-              onChangeText={setTransferEmail}
-              placeholderTextColor={COLORS.sub}
-            />
-
-            <Text style={styles.modalLabel}>Valor</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="0,00"
-              keyboardType="decimal-pad"
-              value={transferAmount}
-              onChangeText={setTransferAmount}
-              placeholderTextColor={COLORS.sub}
-            />
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonCancel]}
-                onPress={() => {
-                  setShowTransfer(false);
-                  setTransferEmail('');
-                  setTransferAmount('');
-                }}
-                disabled={loading}
-              >
-                <Text style={styles.modalButtonTextCancel}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.modalButtonConfirm]}
-                onPress={handleTransfer}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.modalButtonTextConfirm}>Transferir</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: COLORS.card,
     borderRadius: 14,
     padding: 16,
     borderWidth: 1,
-    borderColor: COLORS.border,
     marginBottom: 12,
   },
   rowBetween: {
@@ -394,18 +237,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   cardTitle: {
-    color: COLORS.text,
     fontSize: 14,
     fontWeight: '700',
   },
   balanceValue: {
-    color: COLORS.text,
     fontSize: 22,
     fontWeight: '800',
     marginTop: 4,
   },
   muted: {
-    color: COLORS.sub,
     fontSize: 12,
   },
   progressTrack: {
@@ -418,11 +258,8 @@ const styles = StyleSheet.create({
   },
   progressFill: {
     height: '100%',
-    backgroundColor: COLORS.primary,
   },
   alertBox: {
-    backgroundColor: COLORS.alertBg,
-    borderColor: COLORS.alertBorder,
     borderWidth: 1,
     borderRadius: 12,
     padding: 14,
@@ -430,16 +267,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   alertTitle: {
-    color: COLORS.red,
     fontWeight: '800',
     marginBottom: 6,
   },
-  alertText: {
-    color: COLORS.sub,
-  },
   pillBtn: {
     flex: 1,
-    backgroundColor: COLORS.primary,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
@@ -449,7 +281,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   sectionTitle: {
-    color: COLORS.text,
     fontWeight: '800',
     marginBottom: 10,
   },
@@ -458,84 +289,14 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
   },
   txTitle: {
-    color: COLORS.text,
     fontWeight: '700',
   },
   txCategory: {
-    color: COLORS.sub,
     marginTop: 2,
   },
   txAmount: {
-    fontWeight: '700',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalContent: {
-    backgroundColor: COLORS.card,
-    borderRadius: 16,
-    padding: 24,
-    width: '100%',
-    maxWidth: 400,
-  },
-  modalTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 8,
-  },
-  modalSubtitle: {
-    fontSize: 14,
-    color: COLORS.sub,
-    marginBottom: 20,
-  },
-  modalLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginTop: 16,
-    marginBottom: 8,
-  },
-  modalInput: {
-    backgroundColor: '#F1F5F9',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: COLORS.text,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 24,
-  },
-  modalButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  modalButtonCancel: {
-    backgroundColor: '#F1F5F9',
-  },
-  modalButtonConfirm: {
-    backgroundColor: COLORS.primary,
-  },
-  modalButtonTextCancel: {
-    color: COLORS.text,
-    fontWeight: '700',
-  },
-  modalButtonTextConfirm: {
-    color: '#fff',
     fontWeight: '700',
   },
 });

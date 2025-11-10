@@ -1,71 +1,17 @@
-import { doc, getDoc } from 'firebase/firestore';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../services/firebase';
 import COLORS from '../theme/colors';
 
 export default function ProfileScreen({ navigation }) {
   const { user, signOut } = useAuth();
   const name = user?.displayName || 'Usuário';
   const email = user?.email || '';
-  
-  const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
-  const [loading, setLoading] = useState(true);
 
-  // Buscar foto do Firestore
-  useEffect(() => {
-    let mounted = true;
-    
-    (async () => {
-      try {
-        const refUser = doc(db, 'users', user.uid);
-        const snap = await getDoc(refUser);
-        
-        if (mounted && snap.exists()) {
-          const data = snap.data();
-          const profilePhoto = data?.profile?.photoURL;
-          
-          if (profilePhoto) {
-            setPhotoURL(profilePhoto);
-          }
-        }
-      } catch (e) {
-        console.log('Erro ao carregar foto do perfil:', e);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    })();
-    
-    return () => { mounted = false; };
-  }, [user?.uid]);
+ function handleEdit() {
+  navigation.navigate('EditProfile');
+}
 
-  // Recarregar foto quando a tela receber foco
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', async () => {
-      try {
-        const refUser = doc(db, 'users', user.uid);
-        const snap = await getDoc(refUser);
-        
-        if (snap.exists()) {
-          const data = snap.data();
-          const profilePhoto = data?.profile?.photoURL;
-          
-          if (profilePhoto) {
-            setPhotoURL(profilePhoto);
-          }
-        }
-      } catch (e) {
-        console.log('Erro ao recarregar foto:', e);
-      }
-    });
-
-    return unsubscribe;
-  }, [navigation, user?.uid]);
-
-  function handleEdit() {
-    navigation.navigate('EditProfile');
-  }
 
   return (
     <View style={styles.container}>
@@ -90,17 +36,7 @@ export default function ProfileScreen({ navigation }) {
       {/* Card do usuário */}
       <View style={styles.card}>
         <View style={styles.avatar}>
-          {loading ? (
-            <ActivityIndicator size="small" color={COLORS.primary} />
-          ) : photoURL ? (
-            <Image 
-              source={{ uri: photoURL }} 
-              style={styles.avatarImage}
-              onError={() => setPhotoURL('')}
-            />
-          ) : (
-            <Text style={styles.avatarText}>{name?.[0]?.toUpperCase() || 'U'}</Text>
-          )}
+          <Text style={styles.avatarText}>{name?.[0]?.toUpperCase() || 'U'}</Text>
         </View>
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{name}</Text>
@@ -118,6 +54,14 @@ export default function ProfileScreen({ navigation }) {
         <Text style={styles.itemText}>Configurações da Conta</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity
+          style={styles.item}
+          onPress={() => navigation.navigate('Payments')}
+  >
+          <Text style={styles.itemIcon}>💳</Text>
+          <Text style={styles.itemText}>Métodos de Pagamento</Text>
+      </TouchableOpacity>
+
 
       <TouchableOpacity
           style={styles.item}
@@ -127,6 +71,8 @@ export default function ProfileScreen({ navigation }) {
         <Text style={styles.itemText}>Ajuda e Suporte</Text>
       </TouchableOpacity>
 
+
+   
       <TouchableOpacity style={styles.logout} onPress={signOut}>
         <Text style={styles.logoutIcon}>⎋</Text>
         <Text style={styles.logoutText}>Sair</Text>
@@ -181,12 +127,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
-    overflow: 'hidden',
-  },
-  avatarImage: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
   },
   avatarText: { color: COLORS.navy, fontSize: 20, fontWeight: '800' },
   name: { color: COLORS.navy, fontSize: 16, fontWeight: '700' },
