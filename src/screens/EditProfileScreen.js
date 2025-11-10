@@ -20,17 +20,8 @@ import {
   reauthenticateWithCredential,
   EmailAuthProvider,
 } from 'firebase/auth';
-import {
-  doc,
-  getDoc,
-  setDoc,
-} from 'firebase/firestore';
-import {
-  ref,
-  uploadBytesResumable,
-  getDownloadURL,
-} from 'firebase/storage';
-
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { auth, db, storage } from '../services/firebase';
 
 export default function EditProfileScreen({ navigation }) {
@@ -45,12 +36,14 @@ export default function EditProfileScreen({ navigation }) {
   // dados extras (Firestore)
   const [phone, setPhone] = useState('');
   const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
+  const [photoURLInput, setPhotoURLInput] = useState('');
 
   // estados de UI
   const [loadingDoc, setLoadingDoc] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [processing, setProcessing] = useState(false); // salvar URL manual
 
   // 1) buscar dados do Firestore (phone, photoURL)
   useEffect(() => {
@@ -61,10 +54,12 @@ export default function EditProfileScreen({ navigation }) {
         const snap = await getDoc(refUser);
         if (mounted && snap.exists()) {
           const data = snap.data();
-          // tente ler em data.profile.* (como salvamos)
           const p = data?.profile || {};
           if (p.phone) setPhone(p.phone);
-          if (p.photoURL) setPhotoURL(p.photoURL);
+          if (p.photoURL) {
+            setPhotoURL(p.photoURL);
+            setPhotoURLInput(p.photoURL);
+          }
         }
       } catch (e) {
         console.log('LOAD PROFILE DOC ERROR ->', e);
@@ -72,7 +67,9 @@ export default function EditProfileScreen({ navigation }) {
         mounted && setLoadingDoc(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [user?.uid]);
 
   // pede senha para reautenticar (caso precise mudar e-mail)
@@ -100,7 +97,7 @@ export default function EditProfileScreen({ navigation }) {
     });
   }
 
-  // 2) escolher imagem e fazer upload
+  // 2) escolher imagem e fazer upload para o Storage (com progresso)
   async function onPickAvatar() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -117,11 +114,10 @@ export default function EditProfileScreen({ navigation }) {
       if (res.canceled || !res.assets?.length) return;
       const asset = res.assets[0];
 
-      // upload
       setUploading(true);
       setProgress(0);
 
-      // fazer fetch do arquivo local (web/mobile)
+      // funciona bem em RN/Expo (fetch -> blob)
       const blob = await (await fetch(asset.uri)).blob();
       const fileRef = ref(storage, `avatars/${user.uid}.jpg`);
       const task = uploadBytesResumable(fileRef, blob);
@@ -136,11 +132,14 @@ export default function EditProfileScreen({ navigation }) {
 
       // salvar em Auth e Firestore
       await updateProfile(auth.currentUser, { photoURL: url });
-      await setDoc(doc(db, 'users', user.uid), {
-        profile: { photoURL: url },
-      }, { merge: true });
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { profile: { photoURL: url } },
+        { merge: true }
+      );
 
       setPhotoURL(url);
+      setPhotoURLInput(url);
       Alert.alert('Pronto!', 'Foto atualizada.');
     } catch (e) {
       console.log('UPLOAD AVATAR ERROR ->', e);
@@ -150,7 +149,47 @@ export default function EditProfileScreen({ navigation }) {
     }
   }
 
-  // 3) salvar alterações
+  // 3) salvar URL da imagem manualmente (http/https ou dataURL)
+  async function onSavePhotoURL() {
+    const url = photoURLInput.trim();
+    if (!url) {
+      Alert.alert('Atenção', 'Informe uma URL válida.');
+      return;
+    }
+    const isValidUrl =
+      url.startsWith('http://') ||
+      url.startsWith('https://') ||
+      url.startsWith('data:image/');
+
+    if (!isValidUrl) {
+      Alert.alert(
+        'Atenção',
+        'Informe uma URL válida (http://, https:// ou data:image/...).'
+      );
+      return;
+    }
+
+    try {
+      setProcessing(true);
+
+      await updateProfile(auth.currentUser, { photoURL: url });
+      await setDoc(
+        doc(db, 'users', user.uid),
+        { profile: { photoURL: url } },
+        { merge: true }
+      );
+
+      setPhotoURL(url);
+      Alert.alert('Pronto!', 'URL da foto atualizada.');
+    } catch (e) {
+      console.log('SAVE PHOTO URL ERROR ->', e);
+      Alert.alert('Erro', 'Não foi possível salvar a URL.');
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  // 4) salvar alterações de nome, e-mail e extras
   async function handleSave() {
     if (!name.trim()) {
       Alert.alert('Atenção', 'Informe seu nome.');
@@ -231,7 +270,7 @@ export default function EditProfileScreen({ navigation }) {
 
         {/* Avatar */}
         <View style={{ alignItems: 'center', marginVertical: 10 }}>
-          <TouchableOpacity onPress={onPickAvatar} activeOpacity={0.8}>
+          <TouchableOpacity onPress={onPickAvatar} activeOpacity={0.8} disabled={uploading}>
             <View style={styles.avatarWrap}>
               {photoURL ? (
                 <Image source={{ uri: photoURL }} style={styles.avatarImg} />
@@ -241,6 +280,7 @@ export default function EditProfileScreen({ navigation }) {
               <Text style={styles.cameraBadge}>📷</Text>
             </View>
           </TouchableOpacity>
+
           {uploading && (
             <Text style={{ color: COLORS.gray, marginTop: 6 }}>
               Enviando foto... {progress}%
@@ -248,6 +288,31 @@ export default function EditProfileScreen({ navigation }) {
           )}
         </View>
 
+        {/* URL manual da foto */}
+        <Text style={styles.label}>URL da Foto (ou escolha uma imagem acima)</Text>
+        <TextInput
+          value={photoURLInput}
+          onChangeText={setPhotoURLInput}
+          placeholder="https://exemplo.com/foto.jpg ou cole uma dataURL"
+          keyboardType="url"
+          autoCapitalize="none"
+          style={styles.input}
+        />
+        <TouchableOpacity
+          onPress={onSavePhotoURL}
+          disabled={processing || !photoURLInput.trim()}
+          style={[
+            styles.primaryBtn,
+            { marginTop: 8, marginBottom: 0 },
+            (processing || !photoURLInput.trim()) && { opacity: 0.7 },
+          ]}
+        >
+          <Text style={styles.primaryBtnText}>
+            {processing ? 'Salvando...' : 'Salvar URL da Foto'}
+          </Text>
+        </TouchableOpacity>
+
+        {/* Campos de perfil */}
         <Text style={styles.label}>Nome Completo</Text>
         <TextInput
           value={name}
@@ -277,8 +342,11 @@ export default function EditProfileScreen({ navigation }) {
 
         <TouchableOpacity
           onPress={handleSave}
-          disabled={saving || uploading}
-          style={[styles.primaryBtn, (saving || uploading) && { opacity: 0.7 }]}
+          disabled={saving || uploading || processing}
+          style={[
+            styles.primaryBtn,
+            (saving || uploading || processing) && { opacity: 0.7 },
+          ]}
         >
           <Text style={styles.primaryBtnText}>
             {saving ? 'Salvando...' : 'Salvar Alterações'}

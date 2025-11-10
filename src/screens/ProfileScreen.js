@@ -1,6 +1,15 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Image,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { db } from '../services/firebase';
 import COLORS from '../theme/colors';
 
 export default function ProfileScreen({ navigation }) {
@@ -8,14 +17,55 @@ export default function ProfileScreen({ navigation }) {
   const name = user?.displayName || 'Usuário';
   const email = user?.email || '';
 
- function handleEdit() {
-  navigation.navigate('EditProfile');
-}
+  const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
+  const [loading, setLoading] = useState(true);
 
+  // Carrega foto do Firestore ao montar
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const refUser = doc(db, 'users', user.uid);
+        const snap = await getDoc(refUser);
+        if (mounted && snap.exists()) {
+          const data = snap.data();
+          const profilePhoto = data?.profile?.photoURL;
+          if (profilePhoto) setPhotoURL(profilePhoto);
+        }
+      } catch (e) {
+        console.log('Erro ao carregar foto do perfil:', e);
+      } finally {
+        mounted && setLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [user?.uid]);
+
+  // Recarrega quando a tela ganha foco (caso tenha editado a foto)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', async () => {
+      try {
+        const refUser = doc(db, 'users', user.uid);
+        const snap = await getDoc(refUser);
+        if (snap.exists()) {
+          const data = snap.data();
+          const profilePhoto = data?.profile?.photoURL;
+          if (profilePhoto) setPhotoURL(profilePhoto);
+        }
+      } catch (e) {
+        console.log('Erro ao recarregar foto:', e);
+      }
+    });
+    return unsubscribe;
+  }, [navigation, user?.uid]);
+
+  function handleEdit() {
+    navigation.navigate('EditProfile');
+  }
 
   return (
     <View style={styles.container}>
-      {/* App bar com back no canto superior esquerdo */}
+      {/* App bar com voltar no canto superior esquerdo */}
       <View style={styles.appbar}>
         <TouchableOpacity
           onPress={() => navigation.goBack()}
@@ -28,16 +78,28 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
 
         <Text style={styles.appbarTitle}>Perfil</Text>
-
-        {/* Espaçador para balancear o título centralizado */}
+        {/* Espaçador para centralizar o título */}
         <View style={{ width: 72 }} />
       </View>
 
       {/* Card do usuário */}
       <View style={styles.card}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{name?.[0]?.toUpperCase() || 'U'}</Text>
+          {loading ? (
+            <ActivityIndicator size="small" color={COLORS.primary} />
+          ) : photoURL ? (
+            <Image
+              source={{ uri: photoURL }}
+              style={styles.avatarImage}
+              onError={() => setPhotoURL('')}
+            />
+          ) : (
+            <Text style={styles.avatarText}>
+              {name?.[0]?.toUpperCase() || 'U'}
+            </Text>
+          )}
         </View>
+
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{name}</Text>
           <Text style={styles.email}>{email}</Text>
@@ -48,31 +110,32 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      
-      <TouchableOpacity style={styles.item} onPress={() => navigation.navigate('AccountSettings')}>
+      {/* Itens de navegação */}
+      <TouchableOpacity
+        style={styles.item}
+        onPress={() => navigation.navigate('AccountSettings')}
+      >
         <Text style={styles.itemIcon}>🛠️</Text>
         <Text style={styles.itemText}>Configurações da Conta</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
-          style={styles.item}
-          onPress={() => navigation.navigate('Payments')}
-  >
-          <Text style={styles.itemIcon}>💳</Text>
-          <Text style={styles.itemText}>Métodos de Pagamento</Text>
+        style={styles.item}
+        onPress={() => navigation.navigate('Payments')}
+      >
+        <Text style={styles.itemIcon}>💳</Text>
+        <Text style={styles.itemText}>Métodos de Pagamento</Text>
       </TouchableOpacity>
 
-
       <TouchableOpacity
-          style={styles.item}
-          onPress={() => navigation.navigate('Support')}  
+        style={styles.item}
+        onPress={() => navigation.navigate('Support')}
       >
         <Text style={styles.itemIcon}>❓</Text>
         <Text style={styles.itemText}>Ajuda e Suporte</Text>
       </TouchableOpacity>
 
-
-   
+      {/* Sair */}
       <TouchableOpacity style={styles.logout} onPress={signOut}>
         <Text style={styles.logoutIcon}>⎋</Text>
         <Text style={styles.logoutText}>Sair</Text>
@@ -99,12 +162,18 @@ const styles = StyleSheet.create({
   backWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    width: 72, 
+    width: 72,
   },
   backArrow: { color: '#000000ff', fontSize: 20, marginRight: 6 },
   backLabel: { color: '#000000ff', fontSize: 14, fontWeight: '700' },
 
-  appbarTitle: { color: '#000000ff', fontSize: 16, fontWeight: '700', flex: 1, textAlign: 'center' },
+  appbarTitle: {
+    color: '#000000ff',
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+    textAlign: 'center',
+  },
 
   card: {
     backgroundColor: '#fff',
@@ -127,10 +196,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 10,
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
   },
   avatarText: { color: COLORS.navy, fontSize: 20, fontWeight: '800' },
   name: { color: COLORS.navy, fontSize: 16, fontWeight: '700' },
   email: { color: COLORS.gray, marginTop: 2 },
+
   editBtn: {
     paddingHorizontal: 12,
     paddingVertical: 8,

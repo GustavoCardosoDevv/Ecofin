@@ -1,22 +1,31 @@
-import React, { useState } from 'react';
-import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, Modal, TextInput, TouchableOpacity, StyleSheet, FlatList, Alert } from 'react-native';
 import { Calendar } from 'react-native-calendars';
 import { Ionicons } from '@expo/vector-icons';
 
-export default function PaymentsCalendar({ paymentsData = [], onSavePayment }) {
+export default function PaymentsCalendar({
+  paymentsData = [],
+  onSavePayment,           // (payment, isEdit=false)
+  onDeletePayment,         // (id)
+  onTogglePaid,            // (id)
+  onMonthChange,           // (year, month[1-12])
+}) {
   const [selectedDate, setSelectedDate] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
 
-  // 🔹 Agrupar pagamentos por data
-  const markedDates = paymentsData.reduce((acc, payment) => {
-    acc[payment.date] = {
-      marked: true,
-      dotColor: payment.paid ? '#2E7D32' : '#C62828',
-    };
-    return acc;
-  }, {});
+  // Agrupa marcações por data (ponto verde=pago, vermelho=pendente)
+  const markedDates = useMemo(() => {
+    return paymentsData.reduce((acc, p) => {
+      acc[p.date] = {
+        marked: true,
+        dotColor: p.paid ? '#2E7D32' : '#C62828',
+        ...(selectedDate === p.date ? { selected: true, selectedColor: '#2E7D32' } : {}),
+      };
+      return acc;
+    }, selectedDate ? { [selectedDate]: { selected: true, selectedColor: '#2E7D32' } } : {});
+  }, [paymentsData, selectedDate]);
 
   const openModal = (day) => {
     setSelectedDate(day.dateString);
@@ -24,12 +33,15 @@ export default function PaymentsCalendar({ paymentsData = [], onSavePayment }) {
   };
 
   const handleSave = () => {
-    if (!title || !amount) return;
+    if (!selectedDate || !title || !amount) {
+      Alert.alert('Atenção', 'Preencha todos os campos.');
+      return;
+    }
     const newPayment = {
-      id: Date.now(),
+      // id será criado no Firestore
       date: selectedDate,
-      title,
-      amount: parseFloat(amount),
+      title: title.trim(),
+      amount: parseFloat(String(amount).replace(',', '.')) || 0,
       paid: false,
     };
     onSavePayment && onSavePayment(newPayment, false);
@@ -44,10 +56,8 @@ export default function PaymentsCalendar({ paymentsData = [], onSavePayment }) {
     <View style={styles.container}>
       <Calendar
         onDayPress={openModal}
-        markedDates={{
-          ...markedDates,
-          [selectedDate]: { selected: true, selectedColor: '#2E7D32' },
-        }}
+        onMonthChange={(m) => onMonthChange && onMonthChange(m.year, m.month)}
+        markedDates={markedDates}
         theme={{
           todayTextColor: '#2E7D32',
           selectedDayBackgroundColor: '#2E7D32',
@@ -65,7 +75,7 @@ export default function PaymentsCalendar({ paymentsData = [], onSavePayment }) {
             {dayPayments.length > 0 && (
               <FlatList
                 data={dayPayments}
-                keyExtractor={(item) => item.id.toString()}
+                keyExtractor={(item) => item.id}
                 renderItem={({ item }) => (
                   <View style={styles.paymentItem}>
                     <Ionicons
@@ -73,9 +83,33 @@ export default function PaymentsCalendar({ paymentsData = [], onSavePayment }) {
                       size={20}
                       color={item.paid ? '#2E7D32' : '#C62828'}
                     />
-                    <Text style={styles.paymentText}>
-                      {item.title} - R$ {item.amount.toFixed(2)}
-                    </Text>
+                    <View style={{ flex: 1, marginLeft: 8 }}>
+                      <Text style={[styles.paymentText, item.paid && { textDecorationLine: 'line-through', color: '#6B7280' }]}>
+                        {item.title || 'Pagamento'}
+                      </Text>
+                      <Text style={styles.paymentSub}>R$ {Number(item.amount || 0).toFixed(2)} • {item.paid ? 'Pago' : 'Pendente'}</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: item.paid ? '#E5F6EB' : '#EAF2FD' }]}
+                      onPress={() => onTogglePaid && onTogglePaid(item.id)}
+                    >
+                      <Text style={[styles.smallBtnTxt, { color: item.paid ? '#16A34A' : '#2563EB' }]}>
+                        {item.paid ? 'Desmarcar' : 'Marcar pago'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.smallBtn, { backgroundColor: '#FEE2E2' }]}
+                      onPress={() => {
+                        Alert.alert('Excluir', 'Deseja excluir este pagamento?', [
+                          { text: 'Cancelar', style: 'cancel' },
+                          { text: 'Excluir', style: 'destructive', onPress: () => onDeletePayment && onDeletePayment(item.id) },
+                        ]);
+                      }}
+                    >
+                      <Text style={[styles.smallBtnTxt, { color: '#DC2626' }]}>Excluir</Text>
+                    </TouchableOpacity>
                   </View>
                 )}
               />
@@ -140,6 +174,9 @@ const styles = StyleSheet.create({
   saveButtonText: { color: '#fff', fontWeight: '700', textAlign: 'center' },
   closeButton: { marginTop: 10 },
   closeButtonText: { textAlign: 'center', color: '#555' },
-  paymentItem: { flexDirection: 'row', alignItems: 'center', marginVertical: 4 },
-  paymentText: { marginLeft: 8, color: '#333' },
+  paymentItem: { flexDirection: 'row', alignItems: 'center', marginVertical: 6 },
+  paymentText: { color: '#111', fontWeight: '700' },
+  paymentSub: { color: '#6B7280', fontSize: 12 },
+  smallBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, marginLeft: 8 },
+  smallBtnTxt: { fontWeight: '800' },
 });
