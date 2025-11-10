@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system';
 import { useAuth } from '../context/AuthContext';
 import COLORS from '../theme/colors';
 
@@ -25,13 +26,7 @@ import {
   getDoc,
   setDoc,
 } from 'firebase/firestore';
-import {
-  ref,
-  uploadBytesResumable,
-  getDownloadURL,
-} from 'firebase/storage';
-
-import { auth, db, storage } from '../services/firebase';
+import { auth, db } from '../services/firebase';
 
 export default function EditProfileScreen({ navigation }) {
   const { user } = useAuth();
@@ -45,12 +40,12 @@ export default function EditProfileScreen({ navigation }) {
   // dados extras (Firestore)
   const [phone, setPhone] = useState('');
   const [photoURL, setPhotoURL] = useState(user?.photoURL || '');
+  const [photoURLInput, setPhotoURLInput] = useState('');
 
   // estados de UI
   const [loadingDoc, setLoadingDoc] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [processing, setProcessing] = useState(false);
 
   // 1) buscar dados do Firestore (phone, photoURL)
   useEffect(() => {
@@ -64,7 +59,10 @@ export default function EditProfileScreen({ navigation }) {
           // tente ler em data.profile.* (como salvamos)
           const p = data?.profile || {};
           if (p.phone) setPhone(p.phone);
-          if (p.photoURL) setPhotoURL(p.photoURL);
+          if (p.photoURL) {
+            setPhotoURL(p.photoURL);
+            setPhotoURLInput(p.photoURL);
+          }
         }
       } catch (e) {
         console.log('LOAD PROFILE DOC ERROR ->', e);
@@ -100,7 +98,7 @@ export default function EditProfileScreen({ navigation }) {
     });
   }
 
-  // 2) escolher imagem e fazer upload
+  // 2) escolher imagem e converter para base64
   async function onPickAvatar() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -113,44 +111,85 @@ export default function EditProfileScreen({ navigation }) {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.85,
+        base64: true,
       });
       if (res.canceled || !res.assets?.length) return;
       const asset = res.assets[0];
 
-      // upload
-      setUploading(true);
-      setProgress(0);
+      setProcessing(true);
 
-      // fazer fetch do arquivo local (web/mobile)
-      const blob = await (await fetch(asset.uri)).blob();
-      const fileRef = ref(storage, `avatars/${user.uid}.jpg`);
-      const task = uploadBytesResumable(fileRef, blob);
+      // Converter a imagem para base64 e criar data URL
+      let imageUrl;
+      if (asset.base64) {
+        // Se já temos base64 do ImagePicker
+        const mimeType = asset.type || 'image/jpeg';
+        imageUrl = `data:${mimeType};base64,${asset.base64}`;
+      } else if (asset.uri) {
+        // Se não temos base64, ler do arquivo
+        const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        const mimeType = asset.type || 'image/jpeg';
+        imageUrl = `data:${mimeType};base64,${base64}`;
+      } else {
+        throw new Error('Não foi possível processar a imagem.');
+      }
 
-      task.on('state_changed', (snap) => {
-        const p = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
-        setProgress(p);
-      });
+      // Salvar em Auth e Firestore
+      await updateProfile(auth.currentUser, { photoURL: imageUrl });
+      await setDoc(doc(db, 'users', user.uid), {
+        profile: { photoURL: imageUrl },
+      }, { merge: true });
 
-      await task;
-      const url = await getDownloadURL(fileRef);
+      setPhotoURL(imageUrl);
+      setPhotoURLInput(imageUrl);
+      Alert.alert('Pronto!', 'Foto atualizada.');
+    } catch (e) {
+      console.log('PICK AVATAR ERROR ->', e);
+      Alert.alert('Erro', `Não foi possível processar a foto: ${e.message || 'Erro desconhecido'}`);
+    } finally {
+      setProcessing(false);
+    }
+  }
 
-      // salvar em Auth e Firestore
+  // 3) salvar URL da imagem manualmente
+  async function onSavePhotoURL() {
+    const url = photoURLInput.trim();
+    if (!url) {
+      Alert.alert('Atenção', 'Informe uma URL válida.');
+      return;
+    }
+
+    // Validar se é uma URL válida ou data URL
+    const isValidUrl = url.startsWith('http://') || 
+                       url.startsWith('https://') || 
+                       url.startsWith('data:image/');
+    
+    if (!isValidUrl) {
+      Alert.alert('Atenção', 'Informe uma URL válida (http://, https:// ou data:image/).');
+      return;
+    }
+
+    try {
+      setProcessing(true);
+      
+      // Salvar em Auth e Firestore
       await updateProfile(auth.currentUser, { photoURL: url });
       await setDoc(doc(db, 'users', user.uid), {
         profile: { photoURL: url },
       }, { merge: true });
 
       setPhotoURL(url);
-      Alert.alert('Pronto!', 'Foto atualizada.');
+      Alert.alert('Pronto!', 'URL da foto atualizada.');
     } catch (e) {
-      console.log('UPLOAD AVATAR ERROR ->', e);
-      Alert.alert('Erro', 'Não foi possível enviar a foto.');
+      console.log('SAVE PHOTO URL ERROR ->', e);
+      Alert.alert('Erro', `Não foi possível salvar a URL: ${e.message || 'Erro desconhecido'}`);
     } finally {
-      setUploading(false);
+      setProcessing(false);
     }
   }
 
-  // 3) salvar alterações
+  // 4) salvar alterações
   async function handleSave() {
     if (!name.trim()) {
       Alert.alert('Atenção', 'Informe seu nome.');
@@ -231,7 +270,11 @@ export default function EditProfileScreen({ navigation }) {
 
         {/* Avatar */}
         <View style={{ alignItems: 'center', marginVertical: 10 }}>
-          <TouchableOpacity onPress={onPickAvatar} activeOpacity={0.8}>
+          <TouchableOpacity 
+            onPress={onPickAvatar} 
+            activeOpacity={0.8}
+            disabled={processing}
+          >
             <View style={styles.avatarWrap}>
               {photoURL ? (
                 <Image source={{ uri: photoURL }} style={styles.avatarImg} />
@@ -241,12 +284,35 @@ export default function EditProfileScreen({ navigation }) {
               <Text style={styles.cameraBadge}>📷</Text>
             </View>
           </TouchableOpacity>
-          {uploading && (
+          {processing && (
             <Text style={{ color: COLORS.gray, marginTop: 6 }}>
-              Enviando foto... {progress}%
+              Processando foto...
             </Text>
           )}
         </View>
+
+        <Text style={styles.label}>URL da Foto (ou escolha uma imagem acima)</Text>
+        <TextInput
+          value={photoURLInput}
+          onChangeText={setPhotoURLInput}
+          placeholder="https://exemplo.com/foto.jpg ou cole uma URL"
+          keyboardType="url"
+          autoCapitalize="none"
+          style={styles.input}
+        />
+        <TouchableOpacity
+          onPress={onSavePhotoURL}
+          disabled={processing || !photoURLInput.trim()}
+          style={[
+            styles.primaryBtn,
+            { marginTop: 8, marginBottom: 0 },
+            (processing || !photoURLInput.trim()) && { opacity: 0.7 }
+          ]}
+        >
+          <Text style={styles.primaryBtnText}>
+            {processing ? 'Salvando...' : 'Salvar URL da Foto'}
+          </Text>
+        </TouchableOpacity>
 
         <Text style={styles.label}>Nome Completo</Text>
         <TextInput
@@ -277,8 +343,8 @@ export default function EditProfileScreen({ navigation }) {
 
         <TouchableOpacity
           onPress={handleSave}
-          disabled={saving || uploading}
-          style={[styles.primaryBtn, (saving || uploading) && { opacity: 0.7 }]}
+          disabled={saving || processing}
+          style={[styles.primaryBtn, (saving || processing) && { opacity: 0.7 }]}
         >
           <Text style={styles.primaryBtnText}>
             {saving ? 'Salvando...' : 'Salvar Alterações'}

@@ -6,15 +6,26 @@ export async function ensureUserDoc(user) {
   const ref = doc(db, 'users', user.uid);
   const snap = await getDoc(ref);
 
+  const userData = {
+    email: (user.email ?? '').toLowerCase().trim(),
+    displayName: user.displayName ?? '',
+  };
+
   if (!snap.exists()) {
     await setDoc(
       ref,
       {
-        email: user.email ?? '',
-        displayName: user.displayName ?? '',
+        ...userData,
+        balance: 0,
         createdAt: serverTimestamp(),
       },
       { merge: true }
     );
+  } else {
+    // Atualizar email se mudou
+    const currentData = snap.data();
+    if (currentData.email !== userData.email) {
+      await setDoc(ref, { email: userData.email }, { merge: true });
+    }
   }
 }
